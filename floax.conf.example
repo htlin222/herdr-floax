@@ -3,18 +3,39 @@
 # Copy to the plugin's config dir (herdr plugin config-dir herdr-floax):
 #   ~/.config/herdr/plugins/config/herdr-floax/floax.conf
 #
-# Values are read when the floating pane opens. Env vars HERDR_FLOAX_WIDTH_PCT /
-# HERDR_FLOAX_HEIGHT_PCT / HERDR_FLOAX_KEY_HINT override these per-invocation.
+# Values are read when the floating pane opens. Env vars (HERDR_FLOAX_WIDTH_PCT,
+# HERDR_FLOAX_HEIGHT_PCT, HERDR_FLOAX_KEY_HINT, HERDR_FLOAX_BACKDROP,
+# HERDR_FLOAX_BORDER, HERDR_FLOAX_BORDER_TYPE, HERDR_FLOAX_TITLE,
+# HERDR_FLOAX_BOX_BG) override these per-invocation.
 
-# Floating box size as a percentage of the pane (clamped 20..100). Defaults are
-# generous because the backdrop is a dead dark fill (see README "Limitations"),
-# so extra margin is wasted space.
-width_pct = 94
-height_pct = 92
+# Floating box size as a percentage of the pane (clamped 20..100).
+width_pct = 90
+height_pct = 80
 
 # The toggle key shown in the bottom-border hint (display only — the actual
 # keybinding lives in ~/.config/herdr/config.toml).
 key_hint = prefix+f
 
 # Backdrop fill color around the box, as #rrggbb (default: dark green).
+# Only visible where no workspace snapshot content is painted — the toggle
+# script captures the current tab's panes so the backdrop can show the real
+# workspace dimmed; this fill covers the gaps and is the fallback when no
+# snapshot is available.
 backdrop = #0d2b1d
+
+# Border color as #rrggbb. Unset keeps the terminal-palette magenta.
+# Tip: #89b4fa + plain matches herdr's native modal chrome (catppuccin).
+# border = #89b4fa
+
+# Border corners: rounded (default) or plain.
+# border_type = plain
+
+# Title shown centered in the top border. Unset/empty means auto: the
+# basename of the directory the shell starts in, falling back to "floax".
+# title = floax
+
+# Box background as #rrggbb, painted wherever the embedded screen has no
+# explicit background (border rows included). Unset passes default
+# backgrounds through to the host terminal, which can look patchy next to
+# the multiplexer theme. Tip: #181825 matches herdr's modal panel_bg.
+# box_bg = #181825

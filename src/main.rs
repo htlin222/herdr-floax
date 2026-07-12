@@ -8,11 +8,13 @@
 //! the same way herdr-file-viewer draws its help overlay. The box hosts a live
 //! PTY rather than static text, which is what makes it a shell and not a modal.
 //!
-//! KNOWN LIMITATION: the backdrop around the box is a dark fill this app
-//! paints, NOT the user's live panes dimmed behind it (tmux-floax shows the
-//! real session through its popup). A plugin only controls its own pane's
-//! canvas — herdr owns the other panes' PTYs and has no primitive for
-//! compositing a persistent popup over them. See README.md "Limitations".
+//! The backdrop shows the user's real workspace dimmed behind the box when a
+//! snapshot is available (see src/snapshot.rs — the toggle script captures
+//! each pane via `herdr pane read --format ansi` just before opening us).
+//! The snapshot is a still image of open time, not live panes: a plugin only
+//! controls its own pane's canvas — herdr owns the other panes' PTYs and has
+//! no primitive for compositing a persistent popup over them. Without a
+//! snapshot the backdrop falls back to a dark fill. See README "Limitations".
 //!
 //! Input is raw stdin passthrough: every byte herdr delivers to this pane goes
 //! to the embedded shell verbatim (no lossy key-event translation), so vim,
@@ -25,6 +27,7 @@
 //! survives the pane being closed on dismiss and re-attaches on reopen.
 
 mod config;
+mod snapshot;
 mod ui;
 
 use std::io::{Read, Write};
@@ -64,6 +67,7 @@ fn pty_size(inner: Rect) -> PtySize {
 
 fn main() -> std::io::Result<()> {
     let cfg = config::Config::load();
+    let snap = snapshot::Snapshot::load_from_env();
 
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
     let inner = ui::box_inner(Rect::new(0, 0, cols, rows), &cfg);
@@ -170,7 +174,7 @@ fn main() -> std::io::Result<()> {
     loop {
         {
             let parser = parser.lock().unwrap();
-            terminal.draw(|f| ui::draw(f, &cfg, parser.screen()))?;
+            terminal.draw(|f| ui::draw(f, &cfg, parser.screen(), snap.as_ref()))?;
         }
         let Ok(first) = rx.recv() else { break };
         let mut exit = matches!(first, Ev::Exit);

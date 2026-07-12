@@ -6,7 +6,8 @@ use ratatui::layout::Position;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Clear};
 
-use crate::config::Config;
+use crate::config::{BorderKind, Config};
+use crate::snapshot::Snapshot;
 
 /// The floating box (border included), centered in `area` per the configured
 /// percentages. Width/height are clamped so tiny panes still get a usable box.
@@ -31,24 +32,41 @@ pub fn box_inner(area: Rect, cfg: &Config) -> Rect {
 }
 
 /// Draw one frame: backdrop, box chrome, embedded screen, cursor.
-pub fn draw(f: &mut Frame, cfg: &Config, screen: &vt100::Screen) {
+pub fn draw(f: &mut Frame, cfg: &Config, screen: &vt100::Screen, snap: Option<&Snapshot>) {
     let area = f.area();
 
-    // Dimmed backdrop. The app cannot composite live herdr panes behind the box
-    // (herdr owns those PTYs); a quiet dark fill reads as "workspace dimmed".
-    // Color comes from config (`backdrop`, default dark green).
+    // Backdrop. With a snapshot (captured by the toggle script) the real
+    // workspace is painted dimmed behind the box, like a tmux popup. Without
+    // one, fall back to the quiet dark fill (`backdrop` config color).
     let (br, bg, bb) = cfg.backdrop;
     f.render_widget(
         Block::default().style(Style::default().bg(Color::Rgb(br, bg, bb)).fg(Color::DarkGray)),
         area,
     );
+    if let Some(snap) = snap {
+        render_snapshot_dimmed(f.buffer_mut(), area, snap, cfg.backdrop);
+    }
 
     let boxr = box_rect(area, cfg);
     f.render_widget(Clear, boxr);
+    let border_color = cfg
+        .border
+        .map_or(Color::Magenta, |(r, g, b)| Color::Rgb(r, g, b));
+    let box_bg = cfg.box_bg.map_or(Color::Reset, |(r, g, b)| Color::Rgb(r, g, b));
     let chrome = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Magenta))
-        .title(Line::from(" ⌂ floax ").centered())
+        .style(Style::default().bg(box_bg))
+        .border_type(match cfg.border_type {
+            BorderKind::Plain => BorderType::Plain,
+            BorderKind::Rounded => BorderType::Rounded,
+        })
+        .border_style(Style::default().fg(border_color))
+        .title(
+            Line::from(format!(
+                " ⌂ {} ",
+                if cfg.title.is_empty() { "floax" } else { &cfg.title }
+            ))
+            .centered(),
+        )
         .title_bottom(
             Line::from(format!(" {} hides · shell persists ", cfg.key_hint))
                 .centered()
@@ -57,7 +75,7 @@ pub fn draw(f: &mut Frame, cfg: &Config, screen: &vt100::Screen) {
     let inner = chrome.inner(boxr);
     f.render_widget(chrome, boxr);
 
-    render_screen(f.buffer_mut(), inner, screen);
+    render_screen(f.buffer_mut(), inner, screen, box_bg);
 
     if !screen.hide_cursor() {
         let (r, c) = screen.cursor_position();
@@ -68,7 +86,9 @@ pub fn draw(f: &mut Frame, cfg: &Config, screen: &vt100::Screen) {
 }
 
 /// Paint the vt100 screen's cells into the buffer at `area`'s offset.
-fn render_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen) {
+/// `default_bg` replaces default-background cells so the box interior stays
+/// one consistent color instead of falling through to the host terminal.
+fn render_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen, default_bg: Color) {
     let (rows, cols) = screen.size();
     for r in 0..rows.min(area.height) {
         let mut skip_next = false; // second half of a wide (CJK/emoji) cell
@@ -83,8 +103,11 @@ fn render_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen) {
             };
             let contents = cell.contents();
             target.set_symbol(if contents.is_empty() { " " } else { &contents });
-            let mut style =
-                Style::default().fg(conv_color(cell.fgcolor())).bg(conv_color(cell.bgcolor()));
+            let bg = match cell.bgcolor() {
+                vt100::Color::Default => default_bg,
+                other => conv_color(other),
+            };
+            let mut style = Style::default().fg(conv_color(cell.fgcolor())).bg(bg);
             if cell.bold() {
                 style = style.add_modifier(Modifier::BOLD);
             }
@@ -108,6 +131,110 @@ fn conv_color(c: vt100::Color) -> Color {
         vt100::Color::Default => Color::Reset,
         vt100::Color::Idx(i) => Color::Indexed(i),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
+/// Paint the captured workspace panes into the backdrop, dimmed. Snapshot
+/// coordinates are absolute client cells; the plugin pane is opened as the
+/// only pane of a fresh tab (`--placement tab`), which herdr renders
+/// borderless over the full tab area — the same region the captured tab's
+/// panes occupied — so cells map by subtracting the AREA origin, no border
+/// inset to compensate.
+fn render_snapshot_dimmed(buf: &mut Buffer, area: Rect, snap: &Snapshot, backdrop: (u8, u8, u8)) {
+    for pane in &snap.panes {
+        let ox = i32::from(pane.rect.x) - i32::from(snap.area.x) + i32::from(area.x);
+        let oy = i32::from(pane.rect.y) - i32::from(snap.area.y) + i32::from(area.y);
+        let (rows, cols) = pane.screen.size();
+        for r in 0..rows.min(pane.rect.height) {
+            let mut skip_next = false;
+            for c in 0..cols.min(pane.rect.width) {
+                if skip_next {
+                    skip_next = false;
+                    continue;
+                }
+                let Some(cell) = pane.screen.cell(r, c) else { continue };
+                skip_next = cell.is_wide();
+                let (x, y) = (ox + i32::from(c), oy + i32::from(r));
+                if x < i32::from(area.x)
+                    || y < i32::from(area.y)
+                    || x >= i32::from(area.right())
+                    || y >= i32::from(area.bottom())
+                {
+                    continue;
+                }
+                let Some(target) = buf.cell_mut(Position::new(x as u16, y as u16)) else {
+                    continue;
+                };
+                let contents = cell.contents();
+                target.set_symbol(if contents.is_empty() { " " } else { &contents });
+                target.set_style(
+                    Style::default()
+                        .fg(dim_fg(cell.fgcolor()))
+                        .bg(dim_bg(cell.bgcolor(), backdrop)),
+                );
+            }
+        }
+    }
+}
+
+/// Dim a foreground color to ~40% so the backdrop reads as inactive.
+fn dim_fg(c: vt100::Color) -> Color {
+    let (r, g, b) = match c {
+        vt100::Color::Default => (205, 214, 244), // assume a soft-white text default
+        vt100::Color::Idx(i) => idx_to_rgb(i),
+        vt100::Color::Rgb(r, g, b) => (r, g, b),
+    };
+    scale_rgb(r, g, b, 2, 5) // * 0.4
+}
+
+/// Dim a background color; default backgrounds become the backdrop fill.
+fn dim_bg(c: vt100::Color, backdrop: (u8, u8, u8)) -> Color {
+    match c {
+        vt100::Color::Default => Color::Rgb(backdrop.0, backdrop.1, backdrop.2),
+        vt100::Color::Idx(i) => {
+            let (r, g, b) = idx_to_rgb(i);
+            scale_rgb(r, g, b, 3, 10) // * 0.3
+        }
+        vt100::Color::Rgb(r, g, b) => scale_rgb(r, g, b, 3, 10),
+    }
+}
+
+fn scale_rgb(r: u8, g: u8, b: u8, num: u16, den: u16) -> Color {
+    let s = |v: u8| (u16::from(v) * num / den) as u8;
+    Color::Rgb(s(r), s(g), s(b))
+}
+
+/// xterm 256-color index → RGB (standard palette; 0–15 use common defaults).
+fn idx_to_rgb(i: u8) -> (u8, u8, u8) {
+    const BASE16: [(u8, u8, u8); 16] = [
+        (0, 0, 0),
+        (205, 49, 49),
+        (13, 188, 121),
+        (229, 229, 16),
+        (36, 114, 200),
+        (188, 63, 188),
+        (17, 168, 205),
+        (229, 229, 229),
+        (102, 102, 102),
+        (241, 76, 76),
+        (35, 209, 139),
+        (245, 245, 67),
+        (59, 142, 234),
+        (214, 112, 214),
+        (41, 184, 219),
+        (255, 255, 255),
+    ];
+    match i {
+        0..=15 => BASE16[usize::from(i)],
+        16..=231 => {
+            let n = i - 16;
+            let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+            (level(n / 36), level((n / 6) % 6), level(n % 6))
+        }
+        _ => {
+            let v = 8 + (i - 232) * 10;
+            (v, v, v)
+        }
     }
 }
 
