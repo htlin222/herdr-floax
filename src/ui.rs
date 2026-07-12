@@ -36,15 +36,19 @@ pub fn draw(f: &mut Frame, cfg: &Config, screen: &vt100::Screen, snap: Option<&S
     let area = f.area();
 
     // Backdrop. With a snapshot (captured by the toggle script) the real
-    // workspace is painted dimmed behind the box, like a tmux popup. Without
-    // one, fall back to the quiet dark fill (`backdrop` config color).
-    let (br, bg, bb) = cfg.backdrop;
-    f.render_widget(
-        Block::default().style(Style::default().bg(Color::Rgb(br, bg, bb)).fg(Color::DarkGray)),
-        area,
-    );
+    // workspace is painted behind the box with only its TEXT dimmed — every
+    // background color (including default/terminal) passes through
+    // untouched, like a tmux popup. Without a snapshot, fall back to the
+    // quiet dark fill (`backdrop` config color).
     if let Some(snap) = snap {
-        render_snapshot_dimmed(f.buffer_mut(), area, snap, cfg.backdrop);
+        render_snapshot_dimmed(f.buffer_mut(), area, snap);
+    } else {
+        let (br, bg, bb) = cfg.backdrop;
+        f.render_widget(
+            Block::default()
+                .style(Style::default().bg(Color::Rgb(br, bg, bb)).fg(Color::DarkGray)),
+            area,
+        );
     }
 
     let boxr = box_rect(area, cfg);
@@ -134,13 +138,15 @@ fn conv_color(c: vt100::Color) -> Color {
     }
 }
 
-/// Paint the captured workspace panes into the backdrop, dimmed. Snapshot
+/// Paint the captured workspace panes into the backdrop with dimmed text.
+/// Background colors are passed through UNCHANGED (default stays default) so
+/// the margin looks exactly like the real workspace, only quieter. Snapshot
 /// coordinates are absolute client cells; the plugin pane is opened as the
 /// only pane of a fresh tab (`--placement tab`), which herdr renders
 /// borderless over the full tab area — the same region the captured tab's
 /// panes occupied — so cells map by subtracting the AREA origin, no border
 /// inset to compensate.
-fn render_snapshot_dimmed(buf: &mut Buffer, area: Rect, snap: &Snapshot, backdrop: (u8, u8, u8)) {
+fn render_snapshot_dimmed(buf: &mut Buffer, area: Rect, snap: &Snapshot) {
     for pane in &snap.panes {
         let ox = i32::from(pane.rect.x) - i32::from(snap.area.x) + i32::from(area.x);
         let oy = i32::from(pane.rect.y) - i32::from(snap.area.y) + i32::from(area.y);
@@ -170,7 +176,7 @@ fn render_snapshot_dimmed(buf: &mut Buffer, area: Rect, snap: &Snapshot, backdro
                 target.set_style(
                     Style::default()
                         .fg(dim_fg(cell.fgcolor()))
-                        .bg(dim_bg(cell.bgcolor(), backdrop)),
+                        .bg(conv_color(cell.bgcolor())),
                 );
             }
         }
@@ -185,18 +191,6 @@ fn dim_fg(c: vt100::Color) -> Color {
         vt100::Color::Rgb(r, g, b) => (r, g, b),
     };
     scale_rgb(r, g, b, 2, 5) // * 0.4
-}
-
-/// Dim a background color; default backgrounds become the backdrop fill.
-fn dim_bg(c: vt100::Color, backdrop: (u8, u8, u8)) -> Color {
-    match c {
-        vt100::Color::Default => Color::Rgb(backdrop.0, backdrop.1, backdrop.2),
-        vt100::Color::Idx(i) => {
-            let (r, g, b) = idx_to_rgb(i);
-            scale_rgb(r, g, b, 3, 10) // * 0.3
-        }
-        vt100::Color::Rgb(r, g, b) => scale_rgb(r, g, b, 3, 10),
-    }
 }
 
 fn scale_rgb(r: u8, g: u8, b: u8, num: u16, den: u16) -> Color {
