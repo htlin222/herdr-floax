@@ -66,7 +66,7 @@ pub fn draw(f: &mut Frame, cfg: &Config, screen: &vt100::Screen, snap: Option<&S
         .border_style(Style::default().fg(border_color))
         .title(
             Line::from(format!(
-                " ⌂ {} ",
+                " {} ",
                 if cfg.title.is_empty() { "floax" } else { &cfg.title }
             ))
             .centered(),

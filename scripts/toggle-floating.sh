@@ -2,13 +2,13 @@
 # Toggle the floating scratch pane for the CURRENT workspace.
 #
 # "Launch-or-reveal, dismiss on repeat", scoped per workspace (mirrors the
-# bundled herdr-file-viewer's launcher pattern). The floating pane is a split
-# that we zoom (maximize) for the fullscreen floating look, found by its label
-# ("⌂ floax") within this workspace:
+# bundled herdr-file-viewer's launcher pattern). The floating pane's id is
+# remembered in a per-workspace state file (its pane/tab labels are renamed
+# to the launch directory's basename, so a fixed label can't identify it):
 #
-#   - no floating pane in this workspace       -> OPEN a new one, maximized
-#   - a floating pane exists but isn't focused  -> REVEAL it (focus + maximize)
-#   - the floating pane IS the focused pane      -> DISMISS it (close)
+#   - no floating pane in this workspace        -> OPEN a new one
+#   - a floating pane exists but isn't focused  -> close it, reopen here
+#   - the floating pane IS the focused pane     -> DISMISS it (close)
 #
 # herdr injects $HERDR_WORKSPACE_ID / $HERDR_PANE_ID / $HERDR_BIN_PATH into this
 # action command. Any parse/edge failure degrades to OPEN — never a silent
@@ -16,7 +16,6 @@
 # (a detach session when a multiplexer is installed).
 set -uo pipefail
 
-LABEL="⌂ floax"
 herdr="${HERDR_BIN_PATH:-herdr}"
 
 # jq is required to parse the pane-list JSON. Fail loudly with a fix hint.
@@ -32,8 +31,12 @@ if [ -z "$ws" ]; then
   ws="$("$herdr" pane current 2>/dev/null | jq -r '.result.pane.workspace_id // empty')"
 fi
 
+# Where we remember the floating pane's id for this workspace.
+state_dir="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}}"
+pidfile="$state_dir/floax-pane-${ws//[^A-Za-z0-9_-]/_}"
+
 open_pane() {
-  # Which pane are we launching from? Needed as the split's target and to
+  # Which pane are we launching from? Needed for the snapshot and to
   # inherit its cwd. Prefer the injected id; fall back to the focused pane.
   local target="${HERDR_PANE_ID:-}"
   [ -z "$target" ] && target="$("$herdr" pane current 2>/dev/null | jq -r '.result.pane.pane_id // empty')"
@@ -79,16 +82,36 @@ open_pane() {
       --placement tab --env HERDR_FLOAX=1 --focus
   [ -n "$cwd" ] && set -- "$@" --env "HERDR_FLOAX_CWD=$cwd"
   [ -n "$snap" ] && set -- "$@" --env "HERDR_FLOAX_SNAPSHOT=$snap"
-  exec "$herdr" "$@" >/dev/null 2>&1
+
+  local out pid tab
+  out="$("$herdr" "$@" 2>/dev/null)"
+  pid="$(printf '%s' "$out" | jq -r '.result.plugin_pane.pane.pane_id // empty')"
+  tab="$(printf '%s' "$out" | jq -r '.result.plugin_pane.pane.tab_id // empty')"
+
+  # Sync the pane and tab labels with the floating window's title: the
+  # basename of the directory the shell starts in (the app derives its
+  # top-border title the same way — see Config::load).
+  local name
+  name="$(basename "${cwd:-}" 2>/dev/null)"
+  if [ -z "$name" ] || [ "$name" = "/" ]; then
+    name="floax"
+  fi
+  if [ -n "$pid" ]; then
+    "$herdr" pane rename "$pid" "$name" >/dev/null 2>&1
+    echo "$pid" > "$pidfile" 2>/dev/null || true
+  fi
+  [ -n "$tab" ] && "$herdr" tab rename "$tab" "$name" >/dev/null 2>&1
+  exit 0
 }
 
-# Find our floating pane in this workspace: "<focused> <pane_id>", or empty.
+# Is the remembered floating pane still alive? "<focused> <pane_id>", or empty.
 found=""
-if [ -n "$ws" ]; then
-  found="$("$herdr" pane list --workspace "$ws" 2>/dev/null \
-    | jq -r --arg L "$LABEL" '
-        .result.panes[]? | select(.label == $L)
-        | "\(.focused) \(.pane_id)"' 2>/dev/null | head -n1)"
+if [ -s "$pidfile" ]; then
+  remembered="$(command cat "$pidfile" 2>/dev/null)"
+  if [ -n "$remembered" ]; then
+    found="$("$herdr" pane get "$remembered" 2>/dev/null \
+      | jq -r '.result.pane | select(.pane_id != null) | "\(.focused) \(.pane_id)"' 2>/dev/null)"
+  fi
 fi
 
 # No floating pane here → open one.
@@ -101,6 +124,7 @@ if [ "$focused" = "true" ]; then
   # Currently shown → dismiss (closing the tab's only pane closes the tab).
   # floating-shell.sh keeps the session alive (detach multiplexer) so the
   # next open re-attaches.
+  : > "$pidfile" 2>/dev/null || true
   exec "$herdr" plugin pane close "$pid"
 else
   # Exists but you focused away → close the stale pane and reopen here: the
