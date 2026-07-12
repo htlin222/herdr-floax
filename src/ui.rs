@@ -146,21 +146,34 @@ fn conv_color(c: vt100::Color) -> Color {
 /// borderless over the full tab area — the same region the captured tab's
 /// panes occupied — so cells map by subtracting the AREA origin, no border
 /// inset to compensate.
+///
+/// With more than one captured pane, herdr was drawing a 1-cell border
+/// around each pane's content — replicate it dimmed (and inset the content
+/// by one cell to its true position), otherwise the content blocks float
+/// borderless at slightly wrong offsets and the margin looks jittery
+/// against the real layout.
 fn render_snapshot_dimmed(buf: &mut Buffer, area: Rect, snap: &Snapshot) {
+    let bordered = snap.panes.len() > 1;
     for pane in &snap.panes {
         let ox = i32::from(pane.rect.x) - i32::from(snap.area.x) + i32::from(area.x);
         let oy = i32::from(pane.rect.y) - i32::from(snap.area.y) + i32::from(area.y);
+        let inset = i32::from(bordered);
+        if bordered {
+            draw_dim_border(buf, area, ox, oy, pane.rect.width, pane.rect.height);
+        }
         let (rows, cols) = pane.screen.size();
-        for r in 0..rows.min(pane.rect.height) {
+        let max_r = pane.rect.height.saturating_sub(2 * bordered as u16);
+        let max_c = pane.rect.width.saturating_sub(2 * bordered as u16);
+        for r in 0..rows.min(max_r) {
             let mut skip_next = false;
-            for c in 0..cols.min(pane.rect.width) {
+            for c in 0..cols.min(max_c) {
                 if skip_next {
                     skip_next = false;
                     continue;
                 }
                 let Some(cell) = pane.screen.cell(r, c) else { continue };
                 skip_next = cell.is_wide();
-                let (x, y) = (ox + i32::from(c), oy + i32::from(r));
+                let (x, y) = (ox + inset + i32::from(c), oy + inset + i32::from(r));
                 if x < i32::from(area.x)
                     || y < i32::from(area.y)
                     || x >= i32::from(area.right())
@@ -181,6 +194,41 @@ fn render_snapshot_dimmed(buf: &mut Buffer, area: Rect, snap: &Snapshot) {
             }
         }
     }
+}
+
+/// Trace a pane's 1-cell border in a muted tone, clipped to `area`. Matches
+/// herdr's plain border set so the dimmed layout mirrors the real one.
+fn draw_dim_border(buf: &mut Buffer, area: Rect, ox: i32, oy: i32, w: u16, h: u16) {
+    if w < 2 || h < 2 {
+        return;
+    }
+    const DIM: Color = Color::Rgb(45, 47, 58);
+    let (w, h) = (i32::from(w), i32::from(h));
+    let mut put = |x: i32, y: i32, sym: &str| {
+        if x < i32::from(area.x)
+            || y < i32::from(area.y)
+            || x >= i32::from(area.right())
+            || y >= i32::from(area.bottom())
+        {
+            return;
+        }
+        if let Some(cell) = buf.cell_mut(Position::new(x as u16, y as u16)) {
+            cell.set_symbol(sym);
+            cell.set_style(Style::default().fg(DIM));
+        }
+    };
+    for x in ox + 1..ox + w - 1 {
+        put(x, oy, "─");
+        put(x, oy + h - 1, "─");
+    }
+    for y in oy + 1..oy + h - 1 {
+        put(ox, y, "│");
+        put(ox + w - 1, y, "│");
+    }
+    put(ox, oy, "┌");
+    put(ox + w - 1, oy, "┐");
+    put(ox, oy + h - 1, "└");
+    put(ox + w - 1, oy + h - 1, "┘");
 }
 
 /// Dim a foreground color to ~40% so the backdrop reads as inactive.
