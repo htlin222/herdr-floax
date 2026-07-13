@@ -20,9 +20,8 @@ pub struct Config {
     pub border: Option<(u8, u8, u8)>,
     /// Border corner style.
     pub border_type: BorderKind,
-    /// Title shown in the top border. Empty means auto: the basename of
-    /// `$HERDR_FLOAX_CWD` (the directory the shell starts in), falling back
-    /// to "floax".
+    /// Title shown in the top border. Empty (the default) draws no title —
+    /// just a clean border line.
     pub title: String,
     /// Box background (RGB) painted wherever the embedded screen has no
     /// explicit background — border rows included. `None` passes default
@@ -67,14 +66,6 @@ impl Config {
             }
         }
         cfg.apply_env(|k| std::env::var(k).ok());
-        if cfg.title.is_empty() {
-            cfg.title = std::env::var("HERDR_FLOAX_CWD")
-                .ok()
-                .as_deref()
-                .and_then(|d| std::path::Path::new(d).file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "floax".into());
-        }
         cfg
     }
 

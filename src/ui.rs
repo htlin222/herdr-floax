@@ -57,25 +57,22 @@ pub fn draw(f: &mut Frame, cfg: &Config, screen: &vt100::Screen, snap: Option<&S
         .border
         .map_or(Color::Magenta, |(r, g, b)| Color::Rgb(r, g, b));
     let box_bg = cfg.box_bg.map_or(Color::Reset, |(r, g, b)| Color::Rgb(r, g, b));
-    let chrome = Block::bordered()
+    let mut chrome = Block::bordered()
         .style(Style::default().bg(box_bg))
         .border_type(match cfg.border_type {
             BorderKind::Plain => BorderType::Plain,
             BorderKind::Rounded => BorderType::Rounded,
         })
         .border_style(Style::default().fg(border_color))
-        .title(
-            Line::from(format!(
-                " {} ",
-                if cfg.title.is_empty() { "floax" } else { &cfg.title }
-            ))
-            .centered(),
-        )
         .title_bottom(
             Line::from(format!(" {} hides · shell persists ", cfg.key_hint))
                 .centered()
                 .style(Style::default().fg(Color::DarkGray)),
         );
+    // No title by default — a clean border line. Set `title` to opt in.
+    if !cfg.title.is_empty() {
+        chrome = chrome.title(Line::from(format!(" {} ", cfg.title)).centered());
+    }
     let inner = chrome.inner(boxr);
     f.render_widget(chrome, boxr);
 

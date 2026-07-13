@@ -88,19 +88,13 @@ open_pane() {
   pid="$(printf '%s' "$out" | jq -r '.result.plugin_pane.pane.pane_id // empty')"
   tab="$(printf '%s' "$out" | jq -r '.result.plugin_pane.pane.tab_id // empty')"
 
-  # Sync the pane and tab labels with the floating window's title: the
-  # basename of the directory the shell starts in (the app derives its
-  # top-border title the same way — see Config::load).
-  local name
-  name="$(basename "${cwd:-}" 2>/dev/null)"
-  if [ -z "$name" ] || [ "$name" = "/" ]; then
-    name="floax"
-  fi
+  # Name the pane and its tab "floax" so the popup is recognizable in the
+  # tab bar, pickers, and pane lists.
   if [ -n "$pid" ]; then
-    "$herdr" pane rename "$pid" "$name" >/dev/null 2>&1
+    "$herdr" pane rename "$pid" "floax" >/dev/null 2>&1
     echo "$pid" > "$pidfile" 2>/dev/null || true
   fi
-  [ -n "$tab" ] && "$herdr" tab rename "$tab" "$name" >/dev/null 2>&1
+  [ -n "$tab" ] && "$herdr" tab rename "$tab" "floax" >/dev/null 2>&1
   exit 0
 }
 

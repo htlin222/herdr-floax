@@ -30,8 +30,8 @@ backdrop = #0d2b1d
 # Border corners: rounded (default) or plain.
 # border_type = plain
 
-# Title shown centered in the top border. Unset/empty means auto: the
-# basename of the directory the shell starts in, falling back to "floax".
+# Title shown centered in the top border. Unset/empty (the default) draws
+# no title — just a clean border line.
 # title = floax
 
 # Box background as #rrggbb, painted wherever the embedded screen has no
