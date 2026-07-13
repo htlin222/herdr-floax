@@ -49,22 +49,31 @@ open_pane() {
 
   # Snapshot the tab's panes (geometry + visible ANSI screen) so the floating
   # box can paint the real workspace dimmed behind it instead of a dead fill
-  # (see src/snapshot.rs). Best-effort: on any failure snap stays empty and
-  # the app falls back to the plain backdrop.
+  # (see src/snapshot.rs). Captured in the BACKGROUND so opening never waits
+  # on it: the app polls for the file and repaints when it lands (the panes'
+  # contents don't change while the popup covers them, so capturing after the
+  # open is equivalent). The old file is truncated first so a stale capture
+  # is never shown, and the new one is moved into place atomically.
+  # Best-effort: on any failure the app falls back to the plain backdrop.
   local snap="" layout
   layout="$("$herdr" pane layout ${target:+--pane "$target"} 2>/dev/null)"
   if [ -n "$layout" ]; then
     snap="${TMPDIR:-/tmp}/herdr-floax-snap-${ws//[^A-Za-z0-9_-]/_}.txt"
-    {
-      printf '%s' "$layout" | jq -r '.result.layout.area | "AREA \(.x) \(.y) \(.width) \(.height)"'
-      printf '%s' "$layout" \
-        | jq -r '.result.layout.panes[] | "\(.pane_id) \(.rect.x) \(.rect.y) \(.rect.width) \(.rect.height)"' \
-        | while read -r pid x y w h; do
-            echo "PANE $x $y $w $h"
-            "$herdr" pane read "$pid" --source visible --format ansi 2>/dev/null
-            echo "FLOAX_END_PANE"
-          done
-    } > "$snap" 2>/dev/null || snap=""
+    : > "$snap" 2>/dev/null || snap=""
+  fi
+  if [ -n "$snap" ]; then
+    (
+      {
+        printf '%s' "$layout" | jq -r '.result.layout.area | "AREA \(.x) \(.y) \(.width) \(.height)"'
+        printf '%s' "$layout" \
+          | jq -r '.result.layout.panes[] | "\(.pane_id) \(.rect.x) \(.rect.y) \(.rect.width) \(.rect.height)"' \
+          | while read -r pid x y w h; do
+              echo "PANE $x $y $w $h"
+              "$herdr" pane read "$pid" --source visible --format ansi 2>/dev/null
+              echo "FLOAX_END_PANE"
+            done
+      } > "$snap.tmp" 2>/dev/null && command mv -f "$snap.tmp" "$snap"
+    ) >/dev/null 2>&1 &
   fi
 
   # `tab` — a real, persistent tab holding just the plugin pane. herdr draws

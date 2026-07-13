@@ -67,7 +67,10 @@ fn pty_size(inner: Rect) -> PtySize {
 
 fn main() -> std::io::Result<()> {
     let cfg = config::Config::load();
-    let snap = snapshot::Snapshot::load_from_env();
+    // The snapshot is captured concurrently by the toggle script so the popup
+    // can open instantly; if it isn't on disk yet, poll for it briefly in the
+    // background and repaint when it lands.
+    let snap = Arc::new(Mutex::new(snapshot::Snapshot::load_from_env()));
 
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
     let inner = ui::box_inner(Rect::new(0, 0, cols, rows), &cfg);
@@ -160,6 +163,26 @@ fn main() -> std::io::Result<()> {
         });
     }
 
+    // Late-arriving snapshot → repaint the backdrop once it lands.
+    if snap.lock().unwrap().is_none() {
+        if let Ok(path) = std::env::var("HERDR_FLOAX_SNAPSHOT") {
+            if !path.is_empty() {
+                let snap = Arc::clone(&snap);
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        if let Some(s) = snapshot::Snapshot::load(&path) {
+                            *snap.lock().unwrap() = Some(s);
+                            let _ = tx.send(Ev::Output);
+                            break;
+                        }
+                    }
+                });
+            }
+        }
+    }
+
     // Terminal up. Restore on panic too, so a bug never wedges the pane raw.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -174,6 +197,7 @@ fn main() -> std::io::Result<()> {
     loop {
         {
             let parser = parser.lock().unwrap();
+            let snap = snap.lock().unwrap();
             terminal.draw(|f| ui::draw(f, &cfg, parser.screen(), snap.as_ref()))?;
         }
         let Ok(first) = rx.recv() else { break };

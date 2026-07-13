@@ -34,8 +34,15 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Load from the file named by `HERDR_FLOAX_SNAPSHOT`, if present/valid.
+    /// The toggle script captures the snapshot in the background (so the
+    /// popup opens without waiting on it) and renames it into place
+    /// atomically — a missing file just means "not ready yet".
     pub fn load_from_env() -> Option<Self> {
-        let path = std::env::var("HERDR_FLOAX_SNAPSHOT").ok()?;
+        Self::load(&std::env::var("HERDR_FLOAX_SNAPSHOT").ok()?)
+    }
+
+    /// Load and parse a snapshot file; None if absent or incomplete.
+    pub fn load(path: &str) -> Option<Self> {
         if path.is_empty() {
             return None;
         }
